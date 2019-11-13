@@ -693,12 +693,14 @@ __txn_checkpoint(WT_SESSION_IMPL *session, const char *cfg[])
 {
     WT_CACHE *cache;
     WT_CONNECTION_IMPL *conn;
+    WT_CURSOR *las_cursor;
     WT_DECL_RET;
     WT_TXN *txn;
     WT_TXN_GLOBAL *txn_global;
     WT_TXN_ISOLATION saved_isolation;
     wt_timestamp_t ckpt_tmp_ts;
     uint64_t fsync_duration_usecs, generation, time_start, time_stop;
+    uint32_t session_flags;
     u_int i;
     bool can_skip, failed, full, idle, logging, tracking;
     void *saved_meta_next;
@@ -853,6 +855,27 @@ __txn_checkpoint(WT_SESSION_IMPL *session, const char *cfg[])
      * files in the checkpoint are now in a consistent state.
      */
     WT_ERR(__wt_txn_commit(session, NULL));
+
+    /* Get a lookaside cursor. */
+    __wt_las_cursor(session, &las_cursor, &session_flags);
+
+    /*
+     * Checkpoint the history store file.
+     */
+    WT_ERR(__wt_txn_begin(session, NULL));
+    session->isolation = txn->isolation = WT_ISO_READ_COMMITTED;
+
+    WT_WITH_DHANDLE(session, WT_CURSOR_DHANDLE(las_cursor), ret = __wt_checkpoint(session, NULL));
+    WT_RET(ret);
+
+    WT_WITH_DHANDLE(
+        session, WT_CURSOR_DHANDLE(las_cursor), ret = __wt_checkpoint_sync(session, NULL));
+    WT_ERR(ret);
+    WT_ERR(__wt_txn_commit(session, NULL));
+
+    WT_ERR(__wt_las_cursor_close(session, &las_cursor, session_flags);
+    __checkpoint_verbose_track(session, "history store sync completed");
+
 
     /*
      * Ensure that the metadata changes are durable before the checkpoint is resolved. Do this by
