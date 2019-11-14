@@ -624,6 +624,12 @@ __checkpoint_prepare(WT_SESSION_IMPL *session, bool *trackingp, const char *cfg[
     WT_ASSERT(session, session->ckpt_handle_next == 0);
     WT_WITH_TABLE_READ_LOCK(
       session, ret = __checkpoint_apply_all(session, cfg, __wt_checkpoint_get_handles));
+
+    /* Add the history store handle to the checkpoint handle queue. */
+    WT_WITH_TABLE_READ_LOCK(
+      session, ret = __wt_schema_worker(session, WT_LAS_URI,
+          __wt_checkpoint_get_handles, NULL, cfg, 0));
+
     return (ret);
 }
 
@@ -855,27 +861,6 @@ __txn_checkpoint(WT_SESSION_IMPL *session, const char *cfg[])
      * files in the checkpoint are now in a consistent state.
      */
     WT_ERR(__wt_txn_commit(session, NULL));
-
-    /* Get a lookaside cursor. */
-    __wt_las_cursor(session, &las_cursor, &session_flags);
-
-    /*
-     * Checkpoint the history store file.
-     */
-    WT_ERR(__wt_txn_begin(session, NULL));
-    session->isolation = txn->isolation = WT_ISO_READ_COMMITTED;
-
-    WT_WITH_DHANDLE(session, WT_CURSOR_DHANDLE(las_cursor), ret = __wt_checkpoint(session, NULL));
-    WT_RET(ret);
-
-    WT_WITH_DHANDLE(
-        session, WT_CURSOR_DHANDLE(las_cursor), ret = __wt_checkpoint_sync(session, NULL));
-    WT_ERR(ret);
-    WT_ERR(__wt_txn_commit(session, NULL));
-
-    WT_ERR(__wt_las_cursor_close(session, &las_cursor, session_flags);
-    __checkpoint_verbose_track(session, "history store sync completed");
-
 
     /*
      * Ensure that the metadata changes are durable before the checkpoint is resolved. Do this by
